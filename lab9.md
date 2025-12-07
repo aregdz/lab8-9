@@ -196,9 +196,205 @@ Time: 0.008s
 
 **2. Конфликты применения: Изучил параметр max_standby_streaming_delay. По умолчанию конфликтующие запросы на реплике откладываются. Отключил откладывание применения (max_standby_streaming_delay = -1). Смоделировал ситуацию: запустите длительный запрос SELECT на реплике. На мастере
 выполните VACUUM таблицы, участвующей в запросе. Убедителся, что запрос на реплике будет прерван. Включил на реплике обратную связь (hot_standby_feedback = on). Повторил эксперимент. Убедился, что теперь VACUUM на мастере откладывается и запрос на реплике не прерывается.**
+Изучение параметров:
+```sql
+-- На реплике проверяем текущие настройки
+SHOW max_standby_streaming_delay;
+```
+```sql
+SHOW hot_standby_feedback;
+```
+```sql
+-- Отключаем откладывание применения
+ALTER SYSTEM SET max_standby_streaming_delay = '-1';
+```
+```sql
+SELECT pg_reload_conf();
+```
+```sql
+-- Включаем обратную связь
+ALTER SYSTEM SET hot_standby_feedback = 'on';
+```
+```sql
+SELECT pg_reload_conf();
+```
+```sql
+SHOW hot_standby_feedback;
+```
+--- фрагменты вывода
+```text
+ max_standby_streaming_delay 
+-----------------------------
+ 30s
+(1 row)
 
+Time: 0.005s
+```
+```text
+ hot_standby_feedback 
+----------------------
+ off
+(1 row)
 
+Time: 0.005s
+```
+```text
+ALTER SYSTEM
+Time: 0.004s
+```
+```text
+ pg_reload_conf 
+----------------
+ t
+(1 row)
 
+Time: 0.007s
+```
+```text
+ALTER SYSTEM
+Time: 0.003s
+```
+```text
+ pg_reload_conf 
+----------------
+ t
+(1 row)
 
+Time: 0.007s
+```
+```text
+ hot_standby_feedback 
+----------------------
+ on
+(1 row)
+
+Time: 0.005s
+```
 **3. Слоты репликации: Остановил реплику. Убедился, что слот репликации на мастере препятствует удалению еще не переданных WAL-сегментов (проверьте через pg_replication_slots). Удалил слот репликации. Убедился, что очистка (vacuum) на мастере возобновилась.**
 
+```sql
+-- Проверяем слот до остановки реплики
+SELECT slot_name, active, restart_lsn FROM pg_replication_slots;
+```
+```sql
+-- Удаляем слот репликации
+SELECT pg_drop_replication_slot('replica_slot');
+```
+```sql
+-- Проверяем очистку
+SELECT slot_name FROM pg_replication_slots;
+```
+--- фргамент вывода
+```text
+ slot_name   | active | restart_lsn 
+-------------+--------+-------------
+ replica_slot| t      | 0/3000140
+(1 row)
+
+Time: 0.009s
+```
+```text
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+Time: 0.006s
+```
+```text
+ slot_name 
+-----------
+(0 rows)
+
+Time: 0.008s
+```
+## Модуль 2: Логическая репликация
+**1. Настройка на одном сервере: Создал две базы данных на одном сервере (db1, db2). В db1 создал таблицу с первичным ключом и данными. Перенес структуру таблицы в db2 (например, с помощью pg_dump --schema-only). Настроил логическую репликацию этой таблицы из db1 (публикация) в db2 (подписка). Проверил работу репликации (вставка на мастере -> появление на подписчике). Удалил подписку**
+```sql
+-- Создаем базы данных
+CREATE DATABASE db1;
+```
+```sql
+CREATE DATABASE db2;
+```
+```sql
+-- В db1 создаем таблицу
+CREATE TABLE logical_test (id SERIAL PRIMARY KEY, name TEXT, value INTEGER);
+```
+```sql
+INSERT INTO logical_test (name, value) VALUES ('test1', 100), ('test2', 200);
+```
+```sql
+-- Настраиваем публикацию в db1
+CREATE PUBLICATION logical_pub FOR TABLE logical_test;
+```
+```sql
+-- В db2 создаем таблицу для подписки
+CREATE TABLE logical_test (id SERIAL PRIMARY KEY, name TEXT, value INTEGER);
+```
+```sql
+-- Настраиваем подписку в db2
+CREATE SUBSCRIPTION logical_sub 
+CONNECTION 'dbname=db1 host=localhost port=5432' 
+PUBLICATION logical_pub;
+```
+```sql
+-- Проверяем репликацию - добавляем данные в мастере
+INSERT INTO logical_test (name, value) VALUES ('test3', 300);
+```
+```sql
+-- Проверяем на подписчике
+SELECT * FROM logical_test;
+```
+```sql
+-- Удаляем подписку
+DROP SUBSCRIPTION logical_sub;
+```
+--- фрагменты вывода
+
+```text
+CREATE DATABASE
+Time: 0.025s
+```
+```text
+CREATE DATABASE
+Time: 0.022s
+```
+```text
+CREATE TABLE
+Time: 0.015s
+```
+```text
+INSERT 0 2
+Time: 0.004s
+```
+```text
+CREATE PUBLICATION
+Time: 0.008s
+```
+```text
+CREATE TABLE
+Time: 0.012s
+```
+```text
+CREATE SUBSCRIPTION
+Time: 1.234s
+```
+```text
+INSERT 0 1
+Time: 0.005s
+```
+```text
+ id | name  | value 
+----+-------+-------
+  1 | test1 |   100
+  2 | test2 |   200
+  3 | test3 |   300
+(3 rows)
+
+Time: 0.009s
+```
+```text
+DROP SUBSCRIPTION
+Time: 0.015s
+```
