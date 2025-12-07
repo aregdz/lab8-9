@@ -43,6 +43,13 @@ ALTER SYSTEM SET synchronous_standby_names = 'replica1';
 ```sql
 SELECT pg_reload_conf();
 ```
+```sql
+-- Проверяем настройки
+SHOW wal_level;
+```
+```sql
+SHOW max_wal_senders;
+```
 ---фрагмет вывода
 ```text
 CREATE ROLE
@@ -76,6 +83,117 @@ pg_reload_conf
 
 Time: 0.008s
 ```
+```text
+wal_level 
+-----------
+ replica
+(1 row)
+
+Time: 0.005s
+```
+```text
+ max_wal_senders 
+-----------------
+ 10
+(1 row)
+
+Time: 0.005s
+```
+# 1.2 Создание слота репликации:
+```sql
+SELECT pg_create_physical_replication_slot('replica_slot');
+```
+```sql
+-- Проверяем слот
+SELECT slot_name, slot_type, active FROM pg_replication_slots;
+```
+--- фрагмент вывола
+```text
+ pg_create_physical_replication_slot 
+-------------------------------------
+ (replica_slot,)
+(1 row)
+
+Time: 0.007s
+```
+```text
+ slot_name   | slot_type | active 
+-------------+-----------+--------
+ replica_slot| physical  | f
+(1 row)
+
+Time: 0.009s
+```
+### Проверка репликации после настройки:
+```sql
+-- На мастере проверяем статус репликации
+SELECT application_name, state, sync_state, sync_priority 
+FROM pg_stat_replication;
+```
+```sql
+-- Проверяем режим мастера
+SELECT pg_is_in_recovery();
+```
+```sql
+-- На реплике проверяем статус
+SELECT pg_is_in_recovery();
+```
+--- фргамент вывода
+```text
+ application_name |   state   | sync_state | sync_priority 
+------------------+-----------+------------+---------------
+ walreceiver      | streaming | sync       |             1
+(1 row)
+
+Time: 0.012s
+```
+```text
+ pg_is_in_recovery 
+-------------------
+ f
+(1 row)
+
+Time: 0.005s
+```
+```text
+ pg_is_in_recovery 
+-------------------
+ t
+(1 row)
+
+Time: 0.006s
+```
+### Тестирование репликации:
+```sql
+-- На мастере создаем тестовые данные
+CREATE TABLE test_replication (id SERIAL PRIMARY KEY, data TEXT);
+```
+```sql
+INSERT INTO test_replication (data) VALUES ('test_data_1'), ('test_data_2');
+```
+```sql
+-- На реплике проверяем данные
+SELECT * FROM test_replication;
+```
+--- фрагмент вывода
+```text
+CREATE TABLE
+Time: 0.015s
+```
+```text
+INSERT 0 2
+Time: 0.004s
+```
+```text
+ id |    data    
+----+------------
+  1 | test_data_1
+  2 | test_data_2
+(2 rows)
+
+Time: 0.008s
+```
+
 **2. Конфликты применения: Изучил параметр max_standby_streaming_delay. По умолчанию конфликтующие запросы на реплике откладываются. Отключил откладывание применения (max_standby_streaming_delay = -1). Смоделировал ситуацию: запустите длительный запрос SELECT на реплике. На мастере
 выполните VACUUM таблицы, участвующей в запросе. Убедителся, что запрос на реплике будет прерван. Включил на реплике обратную связь (hot_standby_feedback = on). Повторил эксперимент. Убедился, что теперь VACUUM на мастере откладывается и запрос на реплике не прерывается.**
 
